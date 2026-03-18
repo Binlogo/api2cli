@@ -1,0 +1,113 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Petstore",
+    "description": "A sample API that uses a petstore as an example",
+    "version": "1.0.0"
+  },
+  "host": "petstore.swagger.io",
+  "basePath": "/v2",
+  "schemes": ["https"],
+  "paths": {
+    "/pet": {
+      "get": {
+        "tags": ["pet"],
+        "summary": "Finds Pets by status",
+        "operationId": "findPetsByStatus",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Status values that need to be considered for filter",
+            "required": true,
+            "type": "string",
+            "enum": ["available", "pending", "sold"]
+          }
+        ],
+        "responses": { "200": { "description": "successful operation" } }
+      },
+      "post": {
+        "tags": ["pet"],
+        "summary": "Add a new pet to the store",
+        "operationId": "addPet",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "description": "Pet object that needs to be added to the store",
+            "required": true
+          }
+        ],
+        "responses": { "405": { "description": "Invalid input" } }
+      }
+    },
+    "/pet/{petId}": {
+      "get": {
+        "tags": ["pet"],
+        "summary": "Find pet by ID",
+        "operationId": "getPetById",
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "description": "ID of pet to return",
+            "required": true,
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": { "description": "successful operation" },
+          "404": { "description": "Pet not found" }
+        }
+      },
+      "delete": {
+        "tags": ["pet"],
+        "summary": "Deletes a pet",
+        "operationId": "deletePet",
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "description": "Pet id to delete",
+            "required": true,
+            "type": "integer"
+          }
+        ],
+        "responses": { "400": { "description": "Invalid ID supplied" } }
+      }
+    },
+    "/store/inventory": {
+      "get": {
+        "tags": ["store"],
+        "summary": "Returns pet inventories by status",
+        "operationId": "getInventory",
+        "parameters": [],
+        "responses": { "200": { "description": "successful operation" } }
+      }
+    },
+    "/user/login": {
+      "get": {
+        "tags": ["user"],
+        "summary": "Logs user into the system",
+        "operationId": "loginUser",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "query",
+            "description": "The user name for login",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "password",
+            "in": "query",
+            "description": "The password for login in clear text",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": { "200": { "description": "successful operation" } }
+      }
+    }
+  }
+}

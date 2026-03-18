@@ -1,122 +1,177 @@
-//! API2CLI - Turn any RESTful API into an executable CLI with one command
+//! `api2cli` — the command-line tool.
+//!
+//! Two primary subcommands:
+//!
+//! * **`generate`** — scaffold a standalone Cargo project whose binary uses
+//!   `api2cli` as a library to run the spec as a CLI.
+//! * **`run`** — execute the spec directly as a CLI without any code
+//!   generation (great for exploration and one-off calls).
 
-use anyhow::Result;
-use clap::{Parser, ValueEnum};
-use std::env;
+use std::path::PathBuf;
 
-mod spec;
-mod generator;
-mod runtime;
+use clap::{Parser, Subcommand};
 
-use spec::SpecLoader;
-use generator::CliGenerator;
-use runtime::HttpClient;
+use api2cli::{DynamicCli, DynamicCliConfig, OutputFormat, ProjectGenerator};
 
-#[derive(Parser, Debug)]
-#[command(name = "api2cli")]
-#[command(about = "Turn any RESTful API into an executable CLI with one command", long_about = None)]
-struct Args {
-    /// OpenAPI spec URL or local file path
-    #[arg(default_value = "https://petstore.swagger.io/v2/swagger.json")]
-    spec: String,
-    
-    /// Output CLI application name
-    #[arg(short, long, default_value = "myapi")]
-    name: String,
-    
-    /// Base URL for the API (if not specified in spec)
-    #[arg(short, long)]
-    base_url: Option<String>,
-    
-    /// Auth token (Bearer or API Key)
-    #[arg(short, long)]
-    token: Option<String>,
-    
-    /// Output directory
-    #[arg(short, long, default_value = ".")]
-    output: String,
-    
-    /// Generate shell completions
-    #[arg(long)]
-    completions: Option<String>,
+// ── CLI definition ────────────────────────────────────────────────────────────
+
+#[derive(Parser)]
+#[command(
+    name = "api2cli",
+    about = "Turn any OpenAPI/Swagger spec into a fully-functional CLI",
+    version,
+    propagate_version = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
-    
-    println!("🔧 Generating CLI: {}", args.name);
-    println!("📡 Loading spec: {}\n", args.spec);
-    
-    // Load spec
-    let spec_json = SpecLoader::load(&args.spec)?;
-    
-    // Generate CLI
-    let mut generator = CliGenerator::new();
-    generator.generate_from_json(&spec_json)?;
-    
-    // Get base URL from spec or args
-    let base_url = args.base_url.or_else(|| {
-        spec_json.get("host")
-            .and_then(|h| h.as_str())
-            .map(|h| {
-                let scheme = spec_json.get("schemes")
-                    .and_then(|s| s.as_array())
-                    .and_then(|arr| arr.first())
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("https");
-                let base_path = spec_json.get("basePath")
-                    .and_then(|b| b.as_str())
-                    .unwrap_or("");
-                format!("{}://{}{}", scheme, h, base_path)
-            })
-    });
-    
-    // Generate the CLI application
-    let cli_code = generator.generate_cli_app(&args.name, base_url.as_deref(), args.token.as_deref());
-    
-    // Write to output
-    let output_dir = if args.output == "." {
-        env::current_dir()?
-    } else {
-        std::path::PathBuf::from(&args.output)
-    };
-    
-    let src_dir = output_dir.join(&args.name).join("src");
-    std::fs::create_dir_all(&src_dir)?;
-    
-    // Write Cargo.toml
-    std::fs::write(
-        output_dir.join(&args.name).join("Cargo.toml"),
-        generate_cargo_toml(&args.name),
-    )?;
-    
-    // Write main.rs
-    std::fs::write(src_dir.join("main.rs"), cli_code)?;
-    
-    println!("✅ Generated CLI app: {}/", args.name);
-    println!("📦 To build and run:");
-    println!("   cd {} && cargo build --release", args.name);
-    println!("   ./target/release/{}", args.name);
-    
+#[derive(Subcommand)]
+enum Commands {
+    /// Scaffold a standalone CLI binary project from an OpenAPI spec.
+    ///
+    /// The generated project contains a single `main.rs` that embeds the spec
+    /// URL and uses `api2cli` as a library. Build it with `cargo build` and
+    /// ship the resulting binary as a native CLI for your API.
+    ///
+    /// Example:
+    ///   api2cli generate https://petstore.swagger.io/v2/swagger.json --name pets
+    Generate {
+        /// OpenAPI spec URL or local file path (JSON or YAML).
+        spec: String,
+
+        /// Name for the generated application (also used as the binary name).
+        #[arg(short, long)]
+        name: String,
+
+        /// Directory in which to create the project folder.
+        #[arg(short, long, default_value = ".")]
+        output: PathBuf,
+    },
+
+    /// Execute an OpenAPI spec directly as a live CLI — no code generation.
+    ///
+    /// Everything after the spec URL/path is forwarded to the dynamic CLI.
+    ///
+    /// Example:
+    ///   api2cli run https://petstore.swagger.io/v2/swagger.json -- pet get-pet-by-id --pet-id 1
+    Run {
+        /// OpenAPI spec URL or local file path (JSON or YAML).
+        spec: String,
+
+        /// Arguments forwarded to the dynamic CLI (use `--` to separate them).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("{} {}", "error:".red().bold(), e);
+        std::process::exit(1);
+    }
+}
+
+fn run() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Generate { spec, name, output } => {
+            let gen = ProjectGenerator {
+                app_name: name,
+                spec_source: spec,
+                output_dir: output,
+            };
+            gen.generate()?;
+        }
+
+        Commands::Run { spec, args } => {
+            let app_name = derive_app_name(&spec);
+
+            let config = DynamicCliConfig {
+                spec_source: spec,
+                app_name: app_name.clone(),
+                base_url_override: None,
+                auth_token: None,
+                output_format: OutputFormat::Pretty,
+            };
+
+            let dynamic = DynamicCli::new(config)?;
+
+            // Prepend the binary name so the arg list mirrors what clap expects
+            // from std::env::args.
+            let full_args: Vec<String> = std::iter::once(app_name).chain(args).collect();
+            dynamic.run_with_args(full_args)?;
+        }
+    }
+
     Ok(())
 }
 
-fn generate_cargo_toml(name: &str) -> String {
-    format!(r#"[package]
-name = "{}"
-version = "0.1.0"
-edition = "2021"
-description = "Auto-generated CLI from OpenAPI spec"
+/// Derive a short, readable app name from a spec URL or file path.
+///
+/// ```text
+/// "https://petstore.swagger.io/v2/swagger.json" → "swagger"
+/// "/path/to/openapi.yaml"                        → "openapi"
+/// "myapi.json"                                   → "myapi"
+/// ```
+fn derive_app_name(spec: &str) -> String {
+    // Take the last path segment, strip query string and fragment, then
+    // remove the file extension.
+    let last = spec
+        .split(&['/', '\\'][..])
+        .next_back()
+        .unwrap_or(spec)
+        .split('?')
+        .next()
+        .unwrap_or(spec)
+        .split('#')
+        .next()
+        .unwrap_or(spec);
 
-[dependencies]
-clap = {{ version = "4.5", features = ["derive"] }}
-reqwest = {{ version = "0.12", features = ["json", "blocking"] }}
-serde = {{ version = "1.0", features = ["derive"] }}
-serde_json = "1.0"
-anyhow = "1.0"
+    let stem = last
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(last);
 
-[[bin]]
-name = "{}"
-path = "src/main.rs"
-"#, name, name)
+    if stem.is_empty() {
+        "api".to_string()
+    } else {
+        stem.to_string()
+    }
+}
+
+use colored::Colorize as _;
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_name_from_url() {
+        assert_eq!(
+            derive_app_name("https://petstore.swagger.io/v2/swagger.json"),
+            "swagger"
+        );
+        assert_eq!(
+            derive_app_name("https://api.example.com/openapi.yaml"),
+            "openapi"
+        );
+    }
+
+    #[test]
+    fn derive_name_from_file() {
+        assert_eq!(derive_app_name("/path/to/myapi.json"), "myapi");
+        assert_eq!(derive_app_name("spec.yaml"), "spec");
+    }
+
+    #[test]
+    fn derive_name_fallback() {
+        assert_eq!(derive_app_name("https://api.example.com/"), "api");
+    }
 }

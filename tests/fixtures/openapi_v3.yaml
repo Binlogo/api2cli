@@ -1,0 +1,63 @@
+openapi: "3.0.3"
+info:
+  title: Sample Items API
+  version: "0.1.0"
+  description: A simple CRUD API for items
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /items:
+    get:
+      tags: [items]
+      operationId: listItems
+      summary: List all items
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: "20"
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+    post:
+      tags: [items]
+      operationId: createItem
+      summary: Create an item
+      requestBody:
+        required: true
+        description: Item to create
+      responses:
+        "201":
+          description: Created
+  /items/{itemId}:
+    get:
+      tags: [items]
+      operationId: getItem
+      summary: Get an item by ID
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+    delete:
+      tags: [items]
+      operationId: deleteItem
+      summary: Delete an item
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
