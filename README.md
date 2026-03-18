@@ -1,103 +1,233 @@
-# API2CLI - OpenAPI to CLI Framework
+# api2cli
 
-> 将 RESTful API 快速转为 CLI 工具的 Rust 框架
+> **Turn any OpenAPI / Swagger specification into a fully-functional CLI with one command.**
 
-## 核心特性
+[![Crates.io](https://img.shields.io/crates/v/api2cli.svg)](https://crates.io/crates/api2cli)
+[![docs.rs](https://img.shields.io/docsrs/api2cli)](https://docs.rs/api2cli)
+[![CI](https://github.com/Binlogo/api2cli/actions/workflows/ci.yml/badge.svg)](https://github.com/Binlogo/api2cli/actions)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
-- ✅ **动态生成** - 运行时解析 OpenAPI Spec，无需编译
-- ✅ **多格式支持** - OpenAPI 3.x / Swagger 2.0，JSON/YAML
-- ✅ **自动 Auth** - Bearer Token / API Key / OAuth
-- ✅ **Shell 补全** - 自动生成 completions
+```
+api2cli generate https://petstore.swagger.io/v2/swagger.json --name pets
+cd pets && cargo build --release
 
-## 快速开始
+./target/release/pets --help
+./target/release/pets pet find-pets-by-status --status available
+./target/release/pets pet get-pet-by-id --pet-id 1
+./target/release/pets store get-inventory
+```
+
+Inspired by the [Google Workspace CLI](https://github.com/googleworkspace/cli).
+
+---
+
+## How it works
+
+```
+OpenAPI spec (URL or file)
+        │
+        ▼
+  ┌─────────────┐       api2cli generate        ┌──────────────────────┐
+  │  SpecLoader │ ─────────────────────────────▶ │  Cargo project       │
+  │  (v2 + v3)  │                                │  src/main.rs embeds  │
+  └──────┬──────┘                                │  spec URL at compile │
+         │                                       │  time; uses api2cli  │
+         │  parse                                │  lib at runtime      │
+         ▼                                       └──────────────────────┘
+  ┌─────────────┐       api2cli run
+  │   ApiSpec   │ ──────────────────────────────▶ live interactive CLI
+  └──────┬──────┘
+         │
+         │  build_command()
+         ▼
+  ┌──────────────────┐
+  │  clap Command    │  tag ▸ operation ▸ flags
+  │  tree (dynamic)  │
+  └──────┬───────────┘
+         │  dispatch()
+         ▼
+  ┌──────────────┐
+  │  HTTP client │ ──── path params, query params, body ──▶ API
+  └──────────────┘
+```
+
+At runtime, the generated binary (or `api2cli run`) reads the OpenAPI spec,
+assembles a `clap` command tree grouped by **tag**, and dispatches the matched
+operation as an HTTP request — all without any static code generation.
+
+---
+
+## Installation
+
+### From source (requires Rust ≥ 1.75)
+
+```bash
+cargo install --git https://github.com/Binlogo/api2cli
+```
+
+### From crates.io (once published)
+
+```bash
+cargo install api2cli
+```
+
+---
+
+## Usage
+
+### `api2cli generate` — scaffold a project
+
+```
+api2cli generate <SPEC> --name <NAME> [--output <DIR>]
+```
+
+| Argument | Description |
+|----------|-------------|
+| `SPEC`   | OpenAPI spec URL or local file path (JSON or YAML) |
+| `--name` | Name of the generated binary / Cargo package |
+| `--output` | Parent directory for the new project (default: `.`) |
+
+**Example — Petstore:**
+
+```bash
+api2cli generate https://petstore.swagger.io/v2/swagger.json --name pets
+cd pets
+cargo build --release
+
+# Use the generated CLI
+./target/release/pets --help
+./target/release/pets pet --help
+./target/release/pets pet find-pets-by-status --status available
+./target/release/pets pet add-pet --body '{"name":"Buddy","photoUrls":["https://example.com/buddy.jpg"],"status":"available"}'
+./target/release/pets pet get-pet-by-id --pet-id 1
+./target/release/pets store get-inventory
+./target/release/pets user login-user --username user1 --password 12345
+```
+
+### `api2cli run` — execute a spec directly
+
+For quick exploration without building a binary:
+
+```bash
+api2cli run https://petstore.swagger.io/v2/swagger.json -- pet get-pet-by-id --pet-id 1
+```
+
+Everything after `--` is forwarded to the dynamic CLI.
+
+---
+
+## Generated CLI features
+
+| Feature | Details |
+|---------|---------|
+| **Tag grouping** | Operations are organised under tag-based subcommands |
+| **Path parameters** | Auto-detected, required flags |
+| **Query parameters** | Optional `--flag value` flags with enum validation |
+| **Request body** | `--body '<json>'` or `--body @file.json` |
+| **Auth** | `--token <bearer>` or `API_TOKEN` env var |
+| **Base URL override** | `--base-url https://staging.api.example.com` |
+| **Pretty output** | JSON responses are pretty-printed by default |
+| **Raw output** | `--output raw` for piping to `jq` or other tools |
+
+---
+
+## Library usage
+
+Add `api2cli` as a dependency to embed a live API CLI in your own binary:
+
+```toml
+[dependencies]
+api2cli = { git = "https://github.com/Binlogo/api2cli" }
+anyhow = "1.0"
+```
 
 ```rust
-use api2cli::Api2Cli;
+use api2cli::{DynamicCli, DynamicCliConfig, OutputFormat};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api2cli = Api2Cli::new(
-        "https://api.example.com/openapi.json",
-        Some("your-token".to_string()),
-    )?;
-    
-    let generator = api2cli.generate_cli()?;
-    
-    // 导出为 shell 脚本
-    println!("{}", generator.export_shell());
-    
-    // 或导出为 Rust clap 代码
-    println!("{}", generator.export_rust_clap());
-    
+fn main() -> anyhow::Result<()> {
+    DynamicCli::new(DynamicCliConfig {
+        spec_source: "https://api.example.com/openapi.json".to_string(),
+        app_name: "myapi".to_string(),
+        base_url_override: None,
+        auth_token: None,
+        output_format: OutputFormat::Pretty,
+    })?
+    .run()?;
     Ok(())
 }
 ```
 
-## 输出示例
-
-### Shell 脚本
-
-```bash
-#!/bin/bash
-# Auto-generated CLI from OpenAPI spec
-
-# GET /users - Get all users
-# Usage: api2cli get-users
-
-# GET /users/{id} - Get user by ID
-# Usage: api2cli get-users-id --[id]
-
-# POST /users - Create a new user
-# Usage: api2cli create-users --[body]
-```
-
-### Rust Clap 代码
+Or drive it programmatically with custom args:
 
 ```rust
-use clap::{Arg, Command};
-
-pub fn build_cli() -> Command {
-    Command::new("api2cli")
-        .subcommand(Command::new("get-users")
-            .about("Get all users")
-        )
-        .subcommand(Command::new("get-users-id")
-            .about("Get user by ID")
-            .arg(Arg::new("--id").required(true))
-        )
-}
+cli.run_with_args(["myapi", "items", "list-items", "--limit", "5"])?;
 ```
 
-## 架构
+---
+
+## Spec support
+
+| Feature | Status |
+|---------|--------|
+| Swagger 2.0 (JSON) | ✅ |
+| Swagger 2.0 (YAML) | ✅ |
+| OpenAPI 3.0 (JSON) | ✅ |
+| OpenAPI 3.0 (YAML) | ✅ |
+| OpenAPI 3.1 | ✅ |
+| Local `$ref` resolution | ✅ |
+| External `$ref` (URL) | 🚧 planned |
+| Multipart / file upload | 🚧 planned |
+| OAuth2 / OIDC flows | 🚧 planned |
+
+---
+
+## Project structure
 
 ```
 api2cli/
 ├── src/
-│   ├── lib.rs       # 主入口
-│   ├── spec.rs      # OpenAPI Spec 解析
-│   ├── generator.rs # CLI 命令生成
-│   ├── runtime.rs   # HTTP 客户端
-│   └── main.rs     # Demo Binary
+│   ├── lib.rs          # Public API surface
+│   ├── main.rs         # `api2cli` binary (generate + run)
+│   ├── error.rs        # Error types
+│   ├── spec.rs         # OpenAPI v2/v3 parser
+│   ├── runtime.rs      # Dynamic CLI builder & HTTP executor
+│   └── generator.rs    # Cargo project scaffolder
+├── tests/
+│   ├── fixtures/       # Local spec files for offline tests
+│   └── integration_test.rs
 ├── Cargo.toml
 └── README.md
 ```
 
-## 运行 Demo
+---
 
-```bash
-cd api2cli
-API_TOKEN=your-token cargo run -- "https://api.example.com/openapi.json"
-```
+## Contributing
 
-## 下一步
+Contributions are welcome! Please open an issue or pull request.
 
-- [ ] 集成 clap derive 直接生成可运行 CLI
-- [ ] 支持更多 auth 方式 (OAuth, API Key)
-- [ ] 生成 shell/bash/zsh completions
-- [ ] 交互式模式 (类似 restish)
-- [ ] Middleware 支持 (logging, retry, rate limit)
+1. Fork the repo and create a feature branch.
+2. Run `cargo test` — all tests must pass.
+3. Run `cargo clippy -- -D warnings` and `cargo fmt`.
+4. Open a PR with a clear description.
 
-## 竞品
+---
 
-- [restish](https://github.com/davecgh/restish) - Go 实现，交互式 REST CLI
-- [Kinopen](https://github.com/霜js/kinopen) - Python，OpenAPI → CLI
-- [swagger2cli](https://github.com/safe-waters/swagger2cli) - Go
+## Related projects
+
+| Project | Language | Notes |
+|---------|----------|-------|
+| [restish](https://github.com/danielgtaylor/restish) | Go | Interactive REST CLI |
+| [swagger2cli](https://github.com/safe-waters/swagger2cli) | Go | Shell script generation |
+| [openapi-generator](https://openapi-generator.tech) | Java | Full client/server codegen |
+| [Google Workspace CLI](https://github.com/googleworkspace/cli) | Go | Inspiration for this project |
+
+---
+
+## License
+
+Licensed under either of
+
+* Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+* MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.

@@ -1,49 +1,40 @@
-//! API2CLI - Generate CLI tools from OpenAPI specifications
-//! 
-//! This PoC demonstrates the core concept: loading an OpenAPI spec and
-//! dynamically generating CLI commands from it.
+//! # api2cli
+//!
+//! **Turn any OpenAPI/Swagger specification into a fully-functional CLI with
+//! one command.**
+//!
+//! ```text
+//! api2cli generate https://petstore.swagger.io/v2/swagger.json --name pets
+//! cd pets && cargo build --release
+//! ./target/release/pets pet get-pet-by-id --pet-id 1
+//! ```
+//!
+//! ## Library usage
+//!
+//! Use [`DynamicCli`] to embed a live API CLI inside your own binary:
+//!
+//! ```no_run
+//! use api2cli::{DynamicCli, DynamicCliConfig, OutputFormat};
+//!
+//! fn main() -> anyhow::Result<()> {
+//!     DynamicCli::new(DynamicCliConfig {
+//!         spec_source: "https://petstore.swagger.io/v2/swagger.json".to_string(),
+//!         app_name: "pets".to_string(),
+//!         base_url_override: None,
+//!         auth_token: None,
+//!         output_format: OutputFormat::Pretty,
+//!     })?
+//!     .run()?;
+//!     Ok(())
+//! }
+//! ```
 
-pub mod spec;
+pub mod error;
 pub mod generator;
 pub mod runtime;
+pub mod spec;
 
-pub use spec::SpecLoader;
-pub use generator::CliGenerator;
-pub use runtime::HttpClient;
-
-use anyhow::Result;
-use serde_json::Value;
-
-/// Main API2CLI struct
-pub struct Api2Cli {
-    spec: Value,
-    #[allow(dead_code)]
-    client: HttpClient,
-}
-
-impl Api2Cli {
-    /// Create a new Api2Cli instance from a spec URL or file
-    pub fn new(spec_source: &str, auth_token: Option<String>) -> Result<Self> {
-        let spec = SpecLoader::load(spec_source)?;
-        let client = HttpClient::new(auth_token);
-        
-        Ok(Self { spec, client })
-    }
-    
-    /// Generate CLI commands from the spec
-    pub fn generate_cli(&self) -> Result<CliGenerator> {
-        let mut generator = CliGenerator::new();
-        generator.generate_from_json(&self.spec)?;
-        Ok(generator)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_api2cli_creation() {
-        assert!(true);
-    }
-}
+pub use error::{Error, Result};
+pub use generator::ProjectGenerator;
+pub use runtime::{DynamicCli, DynamicCliConfig, OutputFormat};
+pub use spec::{ApiSpec, Operation, SpecLoader};
